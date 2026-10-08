@@ -1,0 +1,5 @@
+{
+  "strip_claude_attribution": false,
+  "drop_metadata_user_id": false,
+  "max_output_tokens": 0
+}

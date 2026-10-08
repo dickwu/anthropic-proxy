@@ -1,0 +1,9 @@
+/anthropic-body-proxy
+/bin/
+/runtime/
+/logs/
+/debug/
+*.log
+*.pid
+*.sock
+.env
