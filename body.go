@@ -10,15 +10,17 @@ import (
 )
 
 const anthropicBillingHeaderPrefix = "x-anthropic-billing-header:"
+const claudeCodeIdentityText = "You are Claude Code, Anthropic's official CLI for Claude."
 
 type BodyPolicy struct {
-	StripClaudeAttribution bool `json:"strip_claude_attribution"`
-	DropMetadataUserID     bool `json:"drop_metadata_user_id"`
-	MaxOutputTokens        int  `json:"max_output_tokens"`
+	StripClaudeAttribution  bool `json:"strip_claude_attribution"`
+	StripClaudeCodeIdentity bool `json:"strip_claude_code_identity"`
+	DropMetadataUserID      bool `json:"drop_metadata_user_id"`
+	MaxOutputTokens         int  `json:"max_output_tokens"`
 }
 
 func transformBody(data []byte, policy BodyPolicy) ([]byte, []string, error) {
-	if !policy.StripClaudeAttribution && !policy.DropMetadataUserID && policy.MaxOutputTokens <= 0 {
+	if !policy.StripClaudeAttribution && !policy.StripClaudeCodeIdentity && !policy.DropMetadataUserID && policy.MaxOutputTokens <= 0 {
 		return data, nil, nil
 	}
 
@@ -35,6 +37,15 @@ func transformBody(data []byte, policy BodyPolicy) ([]byte, []string, error) {
 		}
 		if changed {
 			actions = append(actions, "stripped_system_attribution")
+		}
+	}
+	if policy.StripClaudeCodeIdentity {
+		changed, err := stripClaudeCodeIdentity(root)
+		if err != nil {
+			return nil, nil, err
+		}
+		if changed {
+			actions = append(actions, "stripped_claude_code_identity")
 		}
 	}
 	if policy.DropMetadataUserID {
@@ -127,6 +138,56 @@ func stripSystemAttribution(root map[string]json.RawMessage) (bool, error) {
 	return false, nil
 }
 
+func stripClaudeCodeIdentity(root map[string]json.RawMessage) (bool, error) {
+	system, ok := root["system"]
+	if !ok {
+		return false, nil
+	}
+
+	var scalar string
+	if err := json.Unmarshal(system, &scalar); err == nil {
+		rewritten, changed := stripClaudeCodeIdentityLine(scalar)
+		if !changed {
+			return false, nil
+		}
+		encoded, err := json.Marshal(rewritten)
+		if err != nil {
+			return false, err
+		}
+		root["system"] = encoded
+		return true, nil
+	}
+
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(system, &blocks); err != nil {
+		return false, nil
+	}
+	index := claudeCodeIdentityBlockIndex(blocks)
+	if index < 0 {
+		return false, nil
+	}
+	blocks = append(blocks[:index], blocks[index+1:]...)
+	encoded, err := json.Marshal(blocks)
+	if err != nil {
+		return false, err
+	}
+	root["system"] = encoded
+	return true, nil
+}
+
+func claudeCodeIdentityBlockIndex(blocks []json.RawMessage) int {
+	if len(blocks) == 0 {
+		return -1
+	}
+	if blockTextEquals(blocks[0], claudeCodeIdentityText) {
+		return 0
+	}
+	if len(blocks) > 1 && blockTextHasPrefix(blocks[0], anthropicBillingHeaderPrefix) && blockTextEquals(blocks[1], claudeCodeIdentityText) {
+		return 1
+	}
+	return -1
+}
+
 func stripFirstAttributionLine(system string) (string, bool) {
 	lines := strings.SplitAfter(system, "\n")
 	if len(lines) == 0 {
@@ -138,6 +199,34 @@ func stripFirstAttributionLine(system string) (string, bool) {
 		return strings.Join(lines[1:], ""), true
 	}
 	return system, false
+}
+
+func stripClaudeCodeIdentityLine(system string) (string, bool) {
+	lines := strings.SplitAfter(system, "\n")
+	if len(lines) == 0 {
+		return system, false
+	}
+	if lineText(lines[0]) == claudeCodeIdentityText {
+		return strings.Join(lines[1:], ""), true
+	}
+	if len(lines) > 1 && strings.HasPrefix(lineText(lines[0]), anthropicBillingHeaderPrefix) && lineText(lines[1]) == claudeCodeIdentityText {
+		return strings.Join(append(lines[:1], lines[2:]...), ""), true
+	}
+	return system, false
+}
+
+func lineText(line string) string {
+	return strings.TrimSuffix(line, "\n")
+}
+
+func blockTextEquals(block json.RawMessage, want string) bool {
+	text, ok, err := textFromBlock(block)
+	return err == nil && ok && text == want
+}
+
+func blockTextHasPrefix(block json.RawMessage, prefix string) bool {
+	text, ok, err := textFromBlock(block)
+	return err == nil && ok && strings.HasPrefix(text, prefix)
 }
 
 func textFromBlock(block json.RawMessage) (string, bool, error) {

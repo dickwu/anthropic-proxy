@@ -215,7 +215,12 @@ func newProxy(upstream string, policy BodyPolicy, logger *slog.Logger, snapshots
 		}
 		changed := []string{}
 		if r.URL.Path == "/v1/messages" {
-			body, changed, err = transformBody(body, policy)
+			effectivePolicy := policy
+			if !strings.HasPrefix(state.Key, "sk-ant-usr-") {
+				effectivePolicy.StripClaudeAttribution = false
+				effectivePolicy.StripClaudeCodeIdentity = false
+			}
+			body, changed, err = transformBody(body, effectivePolicy)
 			if err != nil {
 				http.Error(w, "configured body rewrite could not be applied", 400)
 				return

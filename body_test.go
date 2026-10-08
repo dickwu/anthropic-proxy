@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const claudeCodeIdentityTestText = "You are Claude Code, Anthropic's official CLI for Claude."
+
 func TestTransformBodyNoPolicyPreservesExactBytes(t *testing.T) {
 	input := []byte("{\n  \"max_tokens\": 1000,\n  \"metadata\": {\"user_id\":\"u-1\"},\n  \"system\": \"x-anthropic-billing-header: keep when disabled\\nReal instruction\"\n}")
 
@@ -19,6 +21,104 @@ func TestTransformBodyNoPolicyPreservesExactBytes(t *testing.T) {
 	}
 	if len(actions) != 0 {
 		t.Fatalf("actions = %v, want none", actions)
+	}
+}
+
+func TestTransformBodyStripsExactClaudeCodeIdentityBlockAtSystemIndexZero(t *testing.T) {
+	input := []byte(`{"system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},{"type":"text","text":"Main real instruction"},{"type":"thinking","thinking":"preserve","signature":"sig"}],"messages":[{"role":"user","content":"keep user"}],"tools":[{"name":"keep-tool"}],"safeguards":{"enabled":true},"metadata":{"trace_id":"trace-1"}}`)
+
+	got, actions, err := transformBody(input, BodyPolicy{StripClaudeCodeIdentity: true})
+	if err != nil {
+		t.Fatalf("transformBody returned error: %v", err)
+	}
+	if !hasAction(actions, "stripped_claude_code_identity") {
+		t.Fatalf("actions = %v, want stripped_claude_code_identity", actions)
+	}
+	if strings.Contains(string(got), claudeCodeIdentityTestText) {
+		t.Fatalf("identity block was not removed: %s", got)
+	}
+	for _, detail := range []string{"Main real instruction", `"thinking":"preserve"`, `"signature":"sig"`, `"content":"keep user"`, `"name":"keep-tool"`, `"safeguards":{"enabled":true}`, `"metadata":{"trace_id":"trace-1"}`} {
+		if !strings.Contains(string(got), detail) {
+			t.Fatalf("detail %q was not preserved: %s", detail, got)
+		}
+	}
+}
+
+func TestTransformBodyStripsExactClaudeCodeIdentityBlockAtIndexOneAfterAttribution(t *testing.T) {
+	input := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: internal"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},{"type":"text","text":"Main real instruction"}],"messages":[{"role":"user","content":"keep user"}]}`)
+
+	got, actions, err := transformBody(input, BodyPolicy{StripClaudeCodeIdentity: true})
+	if err != nil {
+		t.Fatalf("transformBody returned error: %v", err)
+	}
+	if !hasAction(actions, "stripped_claude_code_identity") {
+		t.Fatalf("actions = %v, want stripped_claude_code_identity", actions)
+	}
+	if strings.Contains(string(got), claudeCodeIdentityTestText) {
+		t.Fatalf("identity block was not removed: %s", got)
+	}
+	if !strings.Contains(string(got), "x-anthropic-billing-header: internal") {
+		t.Fatalf("attribution block should remain without StripClaudeAttribution: %s", got)
+	}
+	if !strings.Contains(string(got), "Main real instruction") {
+		t.Fatalf("real instruction was not preserved: %s", got)
+	}
+}
+
+func TestTransformBodyCombinesAttributionAndClaudeCodeIdentityStripping(t *testing.T) {
+	input := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: internal"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},{"type":"text","text":"Main real instruction"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"messages":[{"role":"user","content":"keep user"}]}`)
+
+	got, actions, err := transformBody(input, BodyPolicy{StripClaudeAttribution: true, StripClaudeCodeIdentity: true})
+	if err != nil {
+		t.Fatalf("transformBody returned error: %v", err)
+	}
+	if !hasAction(actions, "stripped_claude_code_identity") || !hasAction(actions, "stripped_system_attribution") {
+		t.Fatalf("actions = %v, want both strip actions", actions)
+	}
+	if strings.Contains(string(got), "x-anthropic-billing-header: internal") {
+		t.Fatalf("attribution block was not removed: %s", got)
+	}
+	if count := strings.Count(string(got), claudeCodeIdentityTestText); count != 1 {
+		t.Fatalf("later identity text should be preserved once, got %d in %s", count, got)
+	}
+	if !strings.Contains(string(got), "Main real instruction") || !strings.Contains(string(got), `"content":"keep user"`) {
+		t.Fatalf("real content was not preserved: %s", got)
+	}
+}
+
+func TestTransformBodyDoesNotStripLongerOrLaterClaudeCodeIdentityBlocks(t *testing.T) {
+	input := []byte(`{"system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude. Follow these important instructions."},{"type":"text","text":"Main real instruction"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"messages":[{"role":"user","content":"keep user"}]}`)
+
+	got, actions, err := transformBody(input, BodyPolicy{StripClaudeCodeIdentity: true})
+	if err != nil {
+		t.Fatalf("transformBody returned error: %v", err)
+	}
+	if !bytes.Equal(got, input) {
+		t.Fatalf("body changed unexpectedly:\nwant %s\n got %s", input, got)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("actions = %v, want none", actions)
+	}
+}
+
+func TestTransformBodyStripsClaudeCodeIdentityScalarLineOnlyInLeadingWindow(t *testing.T) {
+	input := []byte(`{"system":"x-anthropic-billing-header: internal\nYou are Claude Code, Anthropic's official CLI for Claude.\nMain real instruction\nYou are Claude Code, Anthropic's official CLI for Claude.","messages":[{"role":"user","content":"keep user"}]}`)
+
+	got, actions, err := transformBody(input, BodyPolicy{StripClaudeAttribution: true, StripClaudeCodeIdentity: true})
+	if err != nil {
+		t.Fatalf("transformBody returned error: %v", err)
+	}
+	if !hasAction(actions, "stripped_claude_code_identity") || !hasAction(actions, "stripped_system_attribution") {
+		t.Fatalf("actions = %v, want both strip actions", actions)
+	}
+	if strings.Contains(string(got), "x-anthropic-billing-header: internal") {
+		t.Fatalf("attribution line was not removed: %s", got)
+	}
+	if count := strings.Count(string(got), claudeCodeIdentityTestText); count != 1 {
+		t.Fatalf("later identity line should be preserved once, got %d in %s", count, got)
+	}
+	if !strings.Contains(string(got), "Main real instruction") || !strings.Contains(string(got), `"content":"keep user"`) {
+		t.Fatalf("real content was not preserved: %s", got)
 	}
 }
 

@@ -27,12 +27,14 @@ All body edits are disabled by default. Configure independent switches in the po
 ```json
 {
   "strip_claude_attribution": false,
+  "strip_claude_code_identity": false,
   "drop_metadata_user_id": false,
   "max_output_tokens": 0
 }
 ```
 
 - `strip_claude_attribution`: remove only the first system attribution block or first scalar line beginning `x-anthropic-billing-header:`. Later matching text and the remaining system instructions are preserved.
+- `strip_claude_code_identity`: remove only the exact leading vendor boilerplate `You are Claude Code, Anthropic's official CLI for Claude.`, optionally immediately after an attribution block. Longer instructions and later matching text are preserved. Both boilerplate policies apply only to `sk-ant-usr-` API keys, preserving normal OAuth identity.
 - `drop_metadata_user_id`: remove only `metadata.user_id`, preserving other metadata.
 - `max_output_tokens`: optional output cap; zero disables it. A cap that conflicts with an explicit thinking budget is refused.
 
@@ -68,3 +70,9 @@ go vet ./...
 ```
 
 Tests cover body preservation and edits, credential redaction, private debug/inspector directories, upstream credential forwarding and immediate SSE delivery.
+
+## Verified Claude Code compatibility case
+
+For a `sk-ant-usr-` key, exact curl replay of a complete Claude Code request returned HTTP 400 with a credit-balance error. Removing metadata or cache controls did not resolve it; either leading SDK identification block independently reproduced the error. Retaining the complete main system instructions and all other request fields while removing only the two leading SDK boilerplate blocks returned HTTP 200 and completed the stream.
+
+For that observed case, enable `strip_claude_attribution` and `strip_claude_code_identity`. Leave `drop_metadata_user_id` false and `max_output_tokens` zero. This records observed compatibility behavior; the provider's internal billing implementation is not established by these tests.

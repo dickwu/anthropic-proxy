@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +130,61 @@ func TestOAuthCredentialsKeepRequiredIdentity(t *testing.T) {
 	}
 	if header.Get("Authorization") != "Bearer sk-ant-oat01-test-token" || header.Get("Anthropic-Beta") != "oauth-2025-04-20" || header.Get("X-App") != "cli" {
 		t.Fatal("OAuth identity changed")
+	}
+}
+
+func TestProxyBoilerplatePoliciesApplyOnlyToUserAPIKeys(t *testing.T) {
+	body := `{"system":[{"type":"text","text":"x-anthropic-billing-header: attribution"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},{"type":"text","text":"Main instructions","cache_control":{"type":"ephemeral"}},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"messages":[{"role":"user","content":"preserve"}],"tools":[{"name":"keep-tool"}],"thinking":{"type":"enabled","budget_tokens":1024},"metadata":{"user_id":"keep-user"},"max_tokens":128000,"safeguards":{"enabled":true}}`
+	for _, test := range []struct {
+		name, header, credential string
+		strip                    bool
+	}{
+		{"user-api-key", "X-Api-Key", "sk-ant-usr-test-key", true},
+		{"user-bearer", "Authorization", "Bearer sk-ant-usr-test-key", true},
+		{"oauth", "Authorization", "Bearer sk-ant-oat01-test-token", false},
+		{"ordinary-api-key", "X-Api-Key", "sk-ant-api03-test-key", false},
+		{"no-credential", "", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			forwarded := make(chan []byte, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got, _ := io.ReadAll(r.Body)
+				forwarded <- got
+				io.WriteString(w, `{}`)
+			}))
+			defer upstream.Close()
+			handler, err := newProxy(upstream.URL, BodyPolicy{StripClaudeAttribution: true, StripClaudeCodeIdentity: true}, nil, &snapshotStore{}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+			if test.header != "" {
+				request.Header.Set(test.header, test.credential)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != 200 {
+				t.Fatalf("status %d", response.Code)
+			}
+			got := <-forwarded
+			if !test.strip {
+				if string(got) != body {
+					t.Fatal("body identity changed for another credential type")
+				}
+				return
+			}
+			var before, after map[string]any
+			if err := json.Unmarshal([]byte(body), &before); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(got, &after); err != nil {
+				t.Fatal(err)
+			}
+			before["system"] = before["system"].([]any)[2:]
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("proxy changed fields beyond the two leading boilerplate blocks")
+			}
+		})
 	}
 }
 

@@ -1,5 +1,6 @@
 {
   "strip_claude_attribution": false,
+  "strip_claude_code_identity": false,
   "drop_metadata_user_id": false,
   "max_output_tokens": 0
 }
