@@ -22,7 +22,7 @@ The service converts `sk-ant-usr-` credentials to `x-api-key`, removes the two i
 
 ## Body policies
 
-All body edits are disabled by default. Configure independent switches in the policy JSON:
+The manual example leaves all body edits disabled. The macOS service installer uses the verified compatibility defaults in `config.macos.json` for a fresh installation. Configure independent switches in the policy JSON:
 
 ```json
 {
@@ -54,7 +54,22 @@ Messages, tool definitions, thinking signatures, safeguards and permission contr
 python3 scripts/install-macos.py
 ```
 
-The installer creates `com.gwd.anthropic-body-proxy` under the current user's LaunchAgents and starts port 18083 independently of Nginx. Runtime configuration and logs live under `~/.local/state/anthropic-body-proxy/`. The existing policy file is preserved on reinstall.
+The installer creates `com.gwd.anthropic-body-proxy` under the current user's LaunchAgents and starts port 18083 independently of Nginx. It starts again when that user logs in and restarts after unexpected exits. Runtime configuration and logs live under `~/.local/state/anthropic-body-proxy/`. A fresh installation enables `strip_claude_attribution` and `strip_claude_code_identity`, leaves metadata unchanged, and applies no output-token cap. The existing policy file is preserved on reinstall.
+
+On a new Mac with Homebrew installed, sign in to a GitHub account with access to this repository and run:
+
+```sh
+brew install go python gh
+gh auth login
+gh repo clone dickwu/anthropic-proxy ~/anthropic-proxy
+cd ~/anthropic-proxy
+python3 scripts/install-macos.py
+curl -fsS http://127.0.0.1:18083/health
+```
+
+The health response is `{"status":"ok"}`. Installation enables detailed debug logs under `~/.local/state/anthropic-body-proxy/debug/` and metadata events in `requests.jsonl`. Configure each client to use `http://127.0.0.1:18083` and supply its API credential separately; the installer does not change client settings or store credentials.
+
+To update an existing checkout, run `git pull --ff-only` followed by `python3 scripts/install-macos.py`.
 
 After changing the policy, restart the service:
 
@@ -67,9 +82,10 @@ launchctl kickstart -k gui/$(id -u)/com.gwd.anthropic-body-proxy
 ```sh
 go test -race ./...
 go vet ./...
+python3 -m unittest discover -s scripts -p 'test_install_macos.py' -v
 ```
 
-Tests cover body preservation and edits, credential redaction, private debug/inspector directories, upstream credential forwarding and immediate SSE delivery.
+Tests cover body preservation and edits, credential redaction, private debug/inspector directories, upstream credential forwarding and immediate SSE delivery. Installer tests build the real binary inside a temporary user directory and verify fresh defaults, LaunchAgent configuration, private logs, and preservation of existing policies and client settings. They intercept launchctl calls to avoid changing the host's services.
 
 ## Verified Claude Code compatibility case
 

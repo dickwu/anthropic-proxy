@@ -24,7 +24,7 @@ for name in ["debug", "inspect"]:
         raise SystemExit("Debug and inspector directories must be private (0700)")
 config = state / "body-policy.json"
 if not config.exists():
-    shutil.copyfile(project / "config.example.json", config)
+    shutil.copyfile(project / "config.macos.json", config)
     config.chmod(0o600)
 binary.parent.mkdir(parents=True, exist_ok=True)
 temporary_binary = binary.with_name(binary.name + ".new")
