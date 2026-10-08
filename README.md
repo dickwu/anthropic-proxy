@@ -34,7 +34,7 @@ The manual example leaves all body edits disabled. The macOS service installer u
 ```
 
 - `strip_claude_attribution`: remove only the first system attribution block or first scalar line beginning `x-anthropic-billing-header:`. Later matching text and the remaining system instructions are preserved.
-- `strip_claude_code_identity`: remove only the exact leading vendor boilerplate `You are Claude Code, Anthropic's official CLI for Claude.`, optionally immediately after an attribution block. Longer instructions and later matching text are preserved. Both boilerplate policies apply only to `sk-ant-usr-` API keys, preserving normal OAuth identity.
+- `strip_claude_code_identity`: remove only the exact leading CLI boilerplate `You are Claude Code, Anthropic's official CLI for Claude.` or Agent SDK boilerplate `You are a Claude agent, built on Anthropic's Claude Agent SDK.`, optionally immediately after an attribution block. Longer instructions and later matching text are preserved. Both boilerplate policies apply only to `sk-ant-usr-` API keys, preserving normal OAuth identity.
 - `drop_metadata_user_id`: remove only `metadata.user_id`, preserving other metadata.
 - `max_output_tokens`: optional output cap; zero disables it. A cap that conflicts with an explicit thinking budget is refused.
 
@@ -92,3 +92,7 @@ Tests cover body preservation and edits, credential redaction, private debug/ins
 For a `sk-ant-usr-` key, exact curl replay of a complete Claude Code request returned HTTP 400 with a credit-balance error. Removing metadata or cache controls did not resolve it; either leading SDK identification block independently reproduced the error. Retaining the complete main system instructions and all other request fields while removing only the two leading SDK boilerplate blocks returned HTTP 200 and completed the stream.
 
 For that observed case, enable `strip_claude_attribution` and `strip_claude_code_identity`. Leave `drop_metadata_user_id` false and `max_output_tokens` zero. This records observed compatibility behavior; the provider's internal billing implementation is not established by these tests.
+
+Subagents use a different Agent SDK identity string. The same identity policy recognizes that exact string, with the same leading-position and credential restrictions. A same-key Fable comparison returned HTTP 400 with the SDK identity and HTTP 200 with a completed stream after removing only that identity.
+
+Claude Code can separately delay delivery of a child-agent failure notification to its parent. See [subagent failure timing](docs/subagent-failure-timing.md) for measured API and notification timings. The proxy forwards upstream errors and does not retry requests.

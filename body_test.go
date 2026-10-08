@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -119,6 +120,56 @@ func TestTransformBodyStripsClaudeCodeIdentityScalarLineOnlyInLeadingWindow(t *t
 	}
 	if !strings.Contains(string(got), "Main real instruction") || !strings.Contains(string(got), `"content":"keep user"`) {
 		t.Fatalf("real content was not preserved: %s", got)
+	}
+}
+
+func TestTransformBodyHandlesAgentSDKIdentityOnlyInLeadingWindow(t *testing.T) {
+	const identity = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+	block := func(text string) any { return map[string]any{"type": "text", "text": text} }
+	for _, test := range []struct {
+		name   string
+		system any
+		want   any
+	}{
+		{"leading-block", []any{block(identity), block("Main instructions")}, []any{block("Main instructions")}},
+		{"after-attribution", []any{block("x-anthropic-billing-header: sdk-py"), block(identity), block("Main instructions")}, []any{block("Main instructions")}},
+		{"scalar", "x-anthropic-billing-header: sdk-py\n" + identity + "\nMain instructions", "Main instructions"},
+		{"later-block", []any{block("Main instructions"), block(identity)}, []any{block("Main instructions"), block(identity)}},
+		{"longer-block", []any{block(identity + " Keep these instructions.")}, []any{block(identity + " Keep these instructions.")}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := map[string]any{
+				"system":     test.system,
+				"messages":   []any{map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "thinking", "thinking": "preserve", "signature": "preserve-signature"}}}},
+				"tools":      []any{map[string]any{"name": "keep-tool"}},
+				"metadata":   map[string]any{"user_id": "keep-user"},
+				"max_tokens": float64(128000),
+				"safeguards": map[string]any{"enabled": true},
+			}
+			input, err := json.Marshal(before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, actions, err := transformBody(input, BodyPolicy{StripClaudeAttribution: true, StripClaudeCodeIdentity: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var after map[string]any
+			if err := json.Unmarshal(got, &after); err != nil {
+				t.Fatal(err)
+			}
+			before["system"] = test.want
+			if !reflect.DeepEqual(after, before) {
+				t.Fatal("SDK identity was not removed precisely or unrelated fields changed")
+			}
+			if strings.HasPrefix(test.name, "later") || strings.HasPrefix(test.name, "longer") {
+				if !bytes.Equal(got, input) || len(actions) != 0 {
+					t.Fatal("non-leading or longer SDK identity must remain byte-identical")
+				}
+			} else if !hasAction(actions, "stripped_claude_code_identity") {
+				t.Fatal("SDK identity removal was not recorded")
+			}
+		})
 	}
 }
 

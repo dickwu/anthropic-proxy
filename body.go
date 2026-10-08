@@ -11,6 +11,7 @@ import (
 
 const anthropicBillingHeaderPrefix = "x-anthropic-billing-header:"
 const claudeCodeIdentityText = "You are Claude Code, Anthropic's official CLI for Claude."
+const claudeAgentSDKIdentityText = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 
 type BodyPolicy struct {
 	StripClaudeAttribution  bool `json:"strip_claude_attribution"`
@@ -179,10 +180,10 @@ func claudeCodeIdentityBlockIndex(blocks []json.RawMessage) int {
 	if len(blocks) == 0 {
 		return -1
 	}
-	if blockTextEquals(blocks[0], claudeCodeIdentityText) {
+	if blockIsClaudeIdentity(blocks[0]) {
 		return 0
 	}
-	if len(blocks) > 1 && blockTextHasPrefix(blocks[0], anthropicBillingHeaderPrefix) && blockTextEquals(blocks[1], claudeCodeIdentityText) {
+	if len(blocks) > 1 && blockTextHasPrefix(blocks[0], anthropicBillingHeaderPrefix) && blockIsClaudeIdentity(blocks[1]) {
 		return 1
 	}
 	return -1
@@ -206,10 +207,10 @@ func stripClaudeCodeIdentityLine(system string) (string, bool) {
 	if len(lines) == 0 {
 		return system, false
 	}
-	if lineText(lines[0]) == claudeCodeIdentityText {
+	if isClaudeIdentityText(lineText(lines[0])) {
 		return strings.Join(lines[1:], ""), true
 	}
-	if len(lines) > 1 && strings.HasPrefix(lineText(lines[0]), anthropicBillingHeaderPrefix) && lineText(lines[1]) == claudeCodeIdentityText {
+	if len(lines) > 1 && strings.HasPrefix(lineText(lines[0]), anthropicBillingHeaderPrefix) && isClaudeIdentityText(lineText(lines[1])) {
 		return strings.Join(append(lines[:1], lines[2:]...), ""), true
 	}
 	return system, false
@@ -219,9 +220,13 @@ func lineText(line string) string {
 	return strings.TrimSuffix(line, "\n")
 }
 
-func blockTextEquals(block json.RawMessage, want string) bool {
+func isClaudeIdentityText(text string) bool {
+	return text == claudeCodeIdentityText || text == claudeAgentSDKIdentityText
+}
+
+func blockIsClaudeIdentity(block json.RawMessage) bool {
 	text, ok, err := textFromBlock(block)
-	return err == nil && ok && text == want
+	return err == nil && ok && isClaudeIdentityText(text)
 }
 
 func blockTextHasPrefix(block json.RawMessage, prefix string) bool {
