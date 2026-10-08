@@ -6,6 +6,7 @@ import pathlib
 import plistlib
 import shutil
 import subprocess
+import time
 
 project = pathlib.Path(__file__).resolve().parent.parent
 state = pathlib.Path.home() / ".local" / "state" / "anthropic-body-proxy"
@@ -46,5 +47,12 @@ plist.write_bytes(plistlib.dumps(definition))
 plist.chmod(0o600)
 domain = "gui/" + str(os.getuid())
 subprocess.run(["launchctl", "bootout", domain + "/" + label], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-subprocess.run(["launchctl", "bootstrap", domain, str(plist)], check=True)
+# bootout can return before launchd finishes releasing the previous job.
+for attempt in range(6):
+    loaded = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True)
+    if loaded.returncode == 0:
+        break
+    if loaded.returncode != 5 or attempt == 5:
+        raise SystemExit(loaded.stderr.strip() or "Could not bootstrap proxy service")
+    time.sleep(0.25 * 2 ** attempt)
 print(json.dumps({"service": label, "base_url": "http://127.0.0.1:18083", "state_directory": str(state)}))
